@@ -11,40 +11,40 @@ export function registerCommands(bot) {
 
   bot.command("up", async (ctx) => {
     if (!isAllowedUser(ctx.from, allowed)) {
-      await ctx.reply("Não autorizado.");
+      await ctx.reply("Forbidden.");
       return;
     }
     try {
       await ctx.reply(await runUpAll());
     } catch (e) {
       console.error(e);
-      await ctx.reply(`Erro: ${safeReplyErr(e)}`);
+      await ctx.reply(`error: ${safeReplyErr(e)}`);
     }
   });
 
   bot.command("down", async (ctx) => {
     if (!isAllowedUser(ctx.from, allowed)) {
-      await ctx.reply("Não autorizado.");
+      await ctx.reply("Forbidden.");
       return;
     }
     try {
       await ctx.reply(await runDownAll());
     } catch (e) {
       console.error(e);
-      await ctx.reply(`Erro: ${safeReplyErr(e)}`);
+      await ctx.reply(`error: ${safeReplyErr(e)}`);
     }
   });
 
   bot.command("check", async (ctx) => {
     if (!isAllowedUser(ctx.from, allowed)) {
-      await ctx.reply("Não autorizado.");
+      await ctx.reply("Forbidden.");
       return;
     }
     try {
       await ctx.reply(await runCheckAll());
     } catch (e) {
       console.error(e);
-      await ctx.reply(`Erro: ${safeReplyErr(e)}`);
+      await ctx.reply(`error: ${safeReplyErr(e)}`);
     }
   });
 }

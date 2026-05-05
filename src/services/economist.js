@@ -1,3 +1,10 @@
+import {
+  lineFail,
+  lineOk,
+  lineSkip,
+  MS,
+  section,
+} from "../format/lineFormat.js";
 import { formatStatus, RailwayClient } from "./railwayClient.js";
 
 function safeErr(e) {
@@ -11,19 +18,21 @@ export async function runUpAll() {
   const nodes = await client.listServiceNodes();
   const lines = [];
   for (const n of nodes) {
-    const [did, st] = await client.getLatestDeployment(n.id);
+    const [did] = await client.getLatestDeployment(n.id);
     if (!did) {
-      lines.push(`• ${n.name}: sem deployment para reiniciar`);
+      lines.push(lineFail(n.name, MS.upNone));
       continue;
     }
     try {
       const ok = await client.deploymentRestart(did);
-      lines.push(`• ${n.name}: reiniciado (${st} → restart=${ok})`);
+      lines.push(
+        ok ? lineOk(n.name, MS.upOk) : lineFail(n.name, MS.upNo)
+      );
     } catch (ex) {
-      lines.push(`• ${n.name}: falha — ${safeErr(ex)}`);
+      lines.push(lineFail(n.name, safeErr(ex)));
     }
   }
-  return `Subir deployments:\n${lines.join("\n")}`;
+  return section("railway-economist · scale up", lines);
 }
 
 export async function runDownAll() {
@@ -31,20 +40,32 @@ export async function runDownAll() {
   await client.resolveScope();
   const nodes = await client.listServiceNodes();
   const lines = [];
+
   for (const n of nodes) {
     const [did, st] = await client.getLatestDeployment(n.id);
     if (!did) {
-      lines.push(`• ${n.name}: nada para parar (sem deployment)`);
+      lines.push(lineFail(n.name, MS.downNone));
       continue;
     }
+
+    if (st === "SLEEPING") {
+      lines.push(lineSkip(n.name, MS.alreadyIdle));
+      continue;
+    }
+
     try {
       const ok = await client.deploymentStop(did);
-      lines.push(`• ${n.name}: parado (${st} → stop=${ok})`);
+      if (ok) {
+        lines.push(lineOk(n.name, MS.stopOk));
+        continue;
+      }
+      lines.push(lineFail(n.name, MS.stopNo));
     } catch (ex) {
-      lines.push(`• ${n.name}: falha — ${safeErr(ex)}`);
+      lines.push(lineFail(n.name, safeErr(ex)));
     }
   }
-  return `Parar serviços:\n${lines.join("\n")}`;
+
+  return section("railway-economist · scale down", lines);
 }
 
 export async function runCheckAll() {

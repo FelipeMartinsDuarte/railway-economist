@@ -7,7 +7,7 @@ import { createApp } from "./src/http/createApp.js";
 const config = loadConfig();
 
 if (!config.telegramToken) {
-  console.error("Defina TELEGRAM_BOT_TOKEN");
+  console.error("Set TELEGRAM_BOT_TOKEN");
   process.exit(1);
 }
 
@@ -31,7 +31,7 @@ const server = app.listen(config.port, async () => {
       console.error("Webhook:", e?.message || e);
     }
   } else {
-    console.warn("PUBLIC_BASE_URL ausente — configure o webhook manualmente.");
+    console.warn("PUBLIC_BASE_URL unset — register the webhook manually.");
   }
 });
 

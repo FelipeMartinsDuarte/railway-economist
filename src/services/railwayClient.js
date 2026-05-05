@@ -1,3 +1,5 @@
+import { lineFail, lineInfo, lineOk, lineSkip, MS, section } from "../format/lineFormat.js";
+
 const RAILWAY_GQL = "https://backboard.railway.com/graphql/v2";
 
 function env(name, fallback = "") {
@@ -8,8 +10,8 @@ function railwayAuthHint(msg) {
   const m = String(msg || "").toLowerCase();
   if (!m.includes("not authorized") && !m.includes("unauthorized")) return "";
   return (
-    " Verifique token em railway.com/account/tokens; com RAILWAY_PROJECT_TOKEN o projeto vem do próprio token (ignora ID manual errado); " +
-    "se RAILWAY_TOKEN e RAILWAY_PROJECT_TOKEN estiverem os dois definidos, usa-se só RAILWAY_TOKEN."
+    " Check token at railway.com/account/tokens; RAILWAY_PROJECT_TOKEN binds scope from token (manual PROJECT_ID ignored); " +
+    "if both RAILWAY_TOKEN and RAILWAY_PROJECT_TOKEN are set, only RAILWAY_TOKEN is used."
   );
 }
 
@@ -18,7 +20,7 @@ export class RailwayClient {
     this._projectToken = env("RAILWAY_PROJECT_TOKEN");
     this._bearer = env("RAILWAY_TOKEN");
     if (!this._projectToken && !this._bearer) {
-      throw new Error("Defina RAILWAY_TOKEN ou RAILWAY_PROJECT_TOKEN");
+      throw new Error("Set RAILWAY_TOKEN or RAILWAY_PROJECT_TOKEN");
     }
     this._useBearer = Boolean(this._bearer);
     this.projectId = env("RAILWAY_PROJECT_ID");
@@ -72,7 +74,9 @@ export class RailwayClient {
       }
     }
     if (!this.projectId) {
-      throw new Error("RAILWAY_PROJECT_ID ausente (ou token de projeto inválido)");
+      throw new Error(
+        "Missing RAILWAY_PROJECT_ID (or invalid project token)"
+      );
     }
     if (!this.environmentId) {
       const data = await this._post(
@@ -86,7 +90,7 @@ export class RailwayClient {
     }
     if (!this.environmentId) {
       throw new Error(
-        "Não foi possível determinar o environment (defina RAILWAY_ENVIRONMENT_ID)"
+        "Could not resolve environment (set RAILWAY_ENVIRONMENT_ID)"
       );
     }
   }
@@ -173,12 +177,18 @@ export class RailwayClient {
 }
 
 export function formatStatus(rows) {
-  if (!rows.length) return "(nenhum serviço no projeto)";
-  return rows
-    .map((r) => {
-      if (r.error) return `• ${r.serviceName}: erro — ${r.error}`;
-      if (!r.deploymentId) return `• ${r.serviceName}: sem deployment recente`;
-      return `• ${r.serviceName}: ${r.status} (deployment ${r.deploymentId})`;
-    })
-    .join("\n");
+  if (!rows.length) {
+    return section("railway-economist · status", [lineInfo(MS.noServices)]);
+  }
+  const lines = rows.map((r) => {
+    if (r.error) return lineFail(r.serviceName, r.error);
+    if (!r.deploymentId) {
+      return lineSkip(r.serviceName, "no latest deployment");
+    }
+    return lineOk(
+      r.serviceName,
+      `status=${r.status} deploy=${r.deploymentId}`
+    );
+  });
+  return section("railway-economist · status", lines);
 }
