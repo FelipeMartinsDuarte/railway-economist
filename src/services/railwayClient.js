@@ -2,6 +2,14 @@ import { lineFail, lineInfo, lineOk, lineSkip, MS, section } from "../format/lin
 
 const RAILWAY_GQL = "https://backboard.railway.com/graphql/v2";
 
+const RUNNING_LIKE = new Set([
+  "SUCCESS",
+  "BUILDING",
+  "DEPLOYING",
+  "QUEUED",
+  "WAITING",
+]);
+
 function env(name, fallback = "") {
   return String(process.env[name] ?? fallback).trim();
 }
@@ -210,6 +218,17 @@ export class RailwayClient {
       }
     }
     return [...byId.entries()].map(([id, status]) => ({ id, status }));
+  }
+
+  async isServiceIdle(serviceId) {
+    const targets = await this.getDeploymentTargets(serviceId);
+    return !targets.some((t) => RUNNING_LIKE.has(t.status));
+  }
+
+  async getRunningLikeStatuses(serviceId) {
+    const targets = await this.getDeploymentTargets(serviceId);
+    const bad = targets.filter((t) => RUNNING_LIKE.has(t.status));
+    return bad.map((t) => t.status).join(", ") || "(none)";
   }
 
   async deploymentStop(deploymentId) {

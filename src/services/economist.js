@@ -39,25 +39,25 @@ export async function runDownAll() {
   const client = new RailwayClient();
   await client.resolveScope();
   const nodes = await client.listServiceNodes();
-  const lines = [];
+  const bundle = [];
 
   for (const n of nodes) {
     let targets;
     try {
       targets = await client.getDeploymentTargets(n.id);
     } catch (ex) {
-      lines.push(lineFail(n.name, safeErr(ex)));
+      bundle.push({ kind: "line", line: lineFail(n.name, safeErr(ex)) });
       continue;
     }
 
     if (!targets.length) {
-      lines.push(lineFail(n.name, MS.downNone));
+      bundle.push({ kind: "line", line: lineFail(n.name, MS.downNone) });
       continue;
     }
 
     const toStop = targets.filter((t) => t.status !== "SLEEPING");
     if (!toStop.length) {
-      lines.push(lineSkip(n.name, MS.alreadyIdle));
+      bundle.push({ kind: "line", line: lineSkip(n.name, MS.alreadyIdle) });
       continue;
     }
 
@@ -77,24 +77,77 @@ export async function runDownAll() {
     }
 
     const total = toStop.length;
-    if (ok === total) {
+    if (ok === 0) {
+      bundle.push({
+        kind: "line",
+        line: lineFail(n.name, lastErr || MS.stopNo),
+      });
+      continue;
+    }
+    if (ok < total) {
+      bundle.push({
+        kind: "line",
+        line: lineFail(
+          n.name,
+          `partial stop ${ok}/${total}${lastErr ? ` — ${lastErr}` : ""}`
+        ),
+      });
+      continue;
+    }
+
+    bundle.push({
+      kind: "verify",
+      name: n.name,
+      serviceId: n.id,
+      totalDeployments: total,
+    });
+  }
+
+  const skipVerify =
+    String(process.env.RAILWAY_SKIP_STOP_VERIFY ?? "").trim() === "1";
+  const settleMs = Number(process.env.RAILWAY_STOP_SETTLE_MS ?? 5000);
+
+  if (!skipVerify && settleMs > 0 && bundle.some((b) => b.kind === "verify")) {
+    await new Promise((r) => setTimeout(r, settleMs));
+  }
+
+  const lines = [];
+  for (const b of bundle) {
+    if (b.kind === "line") {
+      lines.push(b.line);
+      continue;
+    }
+
+    if (skipVerify) {
       lines.push(
         lineOk(
-          n.name,
-          total > 1
-            ? `stop accepted (${ok}/${total} deployments)`
+          b.name,
+          b.totalDeployments > 1
+            ? `stop accepted (${b.totalDeployments} deployments)`
             : MS.stopOk
         )
       );
-    } else if (ok > 0) {
+      continue;
+    }
+
+    const idle = await client.isServiceIdle(b.serviceId);
+    if (idle) {
       lines.push(
-        lineFail(
-          n.name,
-          `partial stop ${ok}/${total}${lastErr ? ` — ${lastErr}` : ""}`
+        lineOk(
+          b.name,
+          b.totalDeployments > 1
+            ? `stopped (verified) ${b.totalDeployments} deployments`
+            : "stopped (verified)"
         )
       );
     } else {
-      lines.push(lineFail(n.name, lastErr || MS.stopNo));
+      const snap = await client.getRunningLikeStatuses(b.serviceId);
+      lines.push(
+        lineFail(
+          b.name,
+          `stop API accepted but still active-like: ${snap}`
+        )
+      );
     }
   }
 
