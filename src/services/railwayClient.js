@@ -4,6 +4,16 @@ function env(name, fallback = "") {
   return String(process.env[name] ?? fallback).trim();
 }
 
+function railwayAuthHint(msg) {
+  const m = String(msg || "").toLowerCase();
+  if (!m.includes("not authorized") && !m.includes("unauthorized")) return "";
+  return (
+    " Verifique: token válido em railway.com/account/tokens; RAILWAY_PROJECT_ID do projeto certo; " +
+    "se usares RAILWAY_TOKEN e RAILWAY_PROJECT_TOKEN ao mesmo tempo, o código usa só RAILWAY_TOKEN — " +
+    "remove o que não precisas ou gera um token novo."
+  );
+}
+
 export class RailwayClient {
   constructor() {
     this._projectToken = env("RAILWAY_PROJECT_TOKEN");
@@ -11,16 +21,17 @@ export class RailwayClient {
     if (!this._projectToken && !this._bearer) {
       throw new Error("Defina RAILWAY_TOKEN ou RAILWAY_PROJECT_TOKEN");
     }
+    this._useBearer = Boolean(this._bearer);
     this.projectId = env("RAILWAY_PROJECT_ID");
     this.environmentId = env("RAILWAY_ENVIRONMENT_ID");
   }
 
   _headers() {
     const h = { "Content-Type": "application/json" };
-    if (this._projectToken) {
-      h["Project-Access-Token"] = this._projectToken;
-    } else {
+    if (this._useBearer) {
       h.Authorization = `Bearer ${this._bearer}`;
+    } else {
+      h["Project-Access-Token"] = this._projectToken;
     }
     return h;
   }
@@ -42,15 +53,14 @@ export class RailwayClient {
     }
     const json = await r.json();
     if (json.errors?.length) {
-      throw new Error(
-        json.errors.map((e) => e.message).join("; ").slice(0, 300)
-      );
+      const msg = json.errors.map((e) => e.message).join("; ").slice(0, 300);
+      throw new Error(msg + railwayAuthHint(msg));
     }
     return json.data || {};
   }
 
   async resolveScope() {
-    if (this._projectToken) {
+    if (!this._useBearer && this._projectToken) {
       const data = await this._post(
         "query { projectToken { projectId environmentId } }"
       );

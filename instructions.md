@@ -41,7 +41,11 @@ Se **`PUBLIC_BASE_URL`** estiver **vazia**, o webhook **não** é registado auto
 
 ## Railway API
 
-Usa **`RAILWAY_TOKEN`** **ou** **`RAILWAY_PROJECT_TOKEN`** como credencial principal da API (não são dois “logins” obrigatórios em simultâneo).
+Usa **`RAILWAY_TOKEN`** **ou** **`RAILWAY_PROJECT_TOKEN`** — idealmente **apenas um** no `.env`.
+
+Se **os dois** estiverem definidos, esta app usa **`RAILWAY_TOKEN`** (Bearer) e **ignora** o project token. Assim evitas `Not Authorized` por token antigo ou projeto errado misturado.
+
+**Erro “Not Authorized” da Railway:** token revogado/expirado, `RAILWAY_PROJECT_ID` de outro projeto, ou credencial de tipo errado. Gera um token novo em [account/tokens](https://railway.com/account/tokens), confirma o **Project ID** (Ctrl+K no dashboard) e redeploy.
 
 | Variável | O que é |
 |----------|---------|
