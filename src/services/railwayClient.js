@@ -8,9 +8,8 @@ function railwayAuthHint(msg) {
   const m = String(msg || "").toLowerCase();
   if (!m.includes("not authorized") && !m.includes("unauthorized")) return "";
   return (
-    " Verifique: token válido em railway.com/account/tokens; RAILWAY_PROJECT_ID do projeto certo; " +
-    "se usares RAILWAY_TOKEN e RAILWAY_PROJECT_TOKEN ao mesmo tempo, o código usa só RAILWAY_TOKEN — " +
-    "remove o que não precisas ou gera um token novo."
+    " Verifique token em railway.com/account/tokens; com RAILWAY_PROJECT_TOKEN o projeto vem do próprio token (ignora ID manual errado); " +
+    "se RAILWAY_TOKEN e RAILWAY_PROJECT_TOKEN estiverem os dois definidos, usa-se só RAILWAY_TOKEN."
   );
 }
 
@@ -65,8 +64,12 @@ export class RailwayClient {
         "query { projectToken { projectId environmentId } }"
       );
       const pt = data.projectToken || {};
-      this.projectId = this.projectId || pt.projectId || "";
-      this.environmentId = this.environmentId || pt.environmentId || "";
+      if (pt.projectId) {
+        this.projectId = pt.projectId;
+      }
+      if (pt.environmentId) {
+        this.environmentId = pt.environmentId;
+      }
     }
     if (!this.projectId) {
       throw new Error("RAILWAY_PROJECT_ID ausente (ou token de projeto inválido)");
