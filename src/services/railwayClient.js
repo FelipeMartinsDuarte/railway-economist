@@ -96,26 +96,63 @@ export class RailwayClient {
   }
 
   async listServiceNodes() {
-    const data = await this._post(
-      `query ProjectServices($id: String!) {
-        project(id: $id) {
-          services {
-            edges {
-              node { id name }
+    const nodes = [];
+    try {
+      let after = null;
+      let hasNext = true;
+      while (hasNext) {
+        const data = await this._post(
+          `query ProjectServices($id: String!, $after: String) {
+            project(id: $id) {
+              services(first: 100, after: $after) {
+                pageInfo { hasNextPage endCursor }
+                edges {
+                  node { id name }
+                }
+              }
             }
+          }`,
+          { id: this.projectId, after }
+        );
+        const conn = data.project?.services;
+        const edges = conn?.edges || [];
+        for (const e of edges) {
+          const node = e?.node;
+          if (node?.id) {
+            nodes.push({
+              id: String(node.id),
+              name: String(node.name || node.id),
+            });
           }
         }
-      }`,
-      { id: this.projectId }
-    );
-    const edges = data.project?.services?.edges || [];
-    return edges
-      .map((e) => e?.node)
-      .filter(Boolean)
-      .map((node) => ({
-        id: String(node.id),
-        name: String(node.name || node.id),
-      }));
+        const pi = conn?.pageInfo;
+        hasNext = Boolean(pi?.hasNextPage);
+        after = pi?.endCursor || null;
+        if (!hasNext) break;
+      }
+      return nodes;
+    } catch {
+      const data = await this._post(
+        `query ProjectServices($id: String!) {
+          project(id: $id) {
+            services {
+              edges {
+                node { id name }
+              }
+            }
+          }
+        }`,
+        { id: this.projectId }
+      );
+      const edges = data.project?.services?.edges || [];
+      return edges
+        .map((e) => e?.node)
+        .filter(Boolean)
+        .map((node) => ({
+          id: String(node.id),
+          name: String(node.name || node.id),
+        }));
+    }
   }
 
   async getLatestDeployment(serviceId) {
@@ -130,6 +167,49 @@ export class RailwayClient {
     const dep = data.serviceInstance?.latestDeployment;
     if (!dep) return [null, null];
     return [String(dep.id), String(dep.status || "")];
+  }
+
+  async getDeploymentTargets(serviceId) {
+    const vars = {
+      environmentId: this.environmentId,
+      serviceId,
+    };
+    let si = {};
+    try {
+      const data = await this._post(
+        `query Si($environmentId: String!, $serviceId: String!) {
+          serviceInstance(environmentId: $environmentId, serviceId: $serviceId) {
+            activeDeployments { id status }
+            latestDeployment { id status }
+          }
+        }`,
+        vars
+      );
+      si = data.serviceInstance || {};
+    } catch {
+      const data = await this._post(
+        `query Si($environmentId: String!, $serviceId: String!) {
+          serviceInstance(environmentId: $environmentId, serviceId: $serviceId) {
+            latestDeployment { id status }
+          }
+        }`,
+        vars
+      );
+      si = data.serviceInstance || {};
+    }
+
+    const byId = new Map();
+    const actives = si.activeDeployments || [];
+    for (const d of actives) {
+      if (d?.id) byId.set(String(d.id), String(d.status || ""));
+    }
+    if (byId.size === 0) {
+      const latest = si.latestDeployment;
+      if (latest?.id) {
+        byId.set(String(latest.id), String(latest.status || ""));
+      }
+    }
+    return [...byId.entries()].map(([id, status]) => ({ id, status }));
   }
 
   async deploymentStop(deploymentId) {
@@ -154,12 +234,14 @@ export class RailwayClient {
     const result = [];
     for (const n of nodes) {
       try {
-        const [deploymentId, status] = await this.getLatestDeployment(n.id);
+        const targets = await this.getDeploymentTargets(n.id);
+        const first = targets[0];
         result.push({
           serviceId: n.id,
           serviceName: n.name,
-          deploymentId,
-          status,
+          deploymentId: first?.id ?? null,
+          status: first?.status ?? null,
+          activeCount: targets.length,
           error: null,
         });
       } catch (ex) {
@@ -168,6 +250,7 @@ export class RailwayClient {
           serviceName: n.name,
           deploymentId: null,
           status: null,
+          activeCount: 0,
           error: String(ex?.message || ex).slice(0, 200),
         });
       }
@@ -185,9 +268,11 @@ export function formatStatus(rows) {
     if (!r.deploymentId) {
       return lineSkip(r.serviceName, "no latest deployment");
     }
+    const ac = r.activeCount ?? 0;
+    const extra = ac > 1 ? ` active_deployments=${ac}` : "";
     return lineOk(
       r.serviceName,
-      `status=${r.status} deploy=${r.deploymentId}`
+      `status=${r.status} deploy=${r.deploymentId}${extra}`
     );
   });
   return section("railway-economist · status", lines);

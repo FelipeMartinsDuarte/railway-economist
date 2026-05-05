@@ -42,26 +42,59 @@ export async function runDownAll() {
   const lines = [];
 
   for (const n of nodes) {
-    const [did, st] = await client.getLatestDeployment(n.id);
-    if (!did) {
+    let targets;
+    try {
+      targets = await client.getDeploymentTargets(n.id);
+    } catch (ex) {
+      lines.push(lineFail(n.name, safeErr(ex)));
+      continue;
+    }
+
+    if (!targets.length) {
       lines.push(lineFail(n.name, MS.downNone));
       continue;
     }
 
-    if (st === "SLEEPING") {
+    const toStop = targets.filter((t) => t.status !== "SLEEPING");
+    if (!toStop.length) {
       lines.push(lineSkip(n.name, MS.alreadyIdle));
       continue;
     }
 
-    try {
-      const ok = await client.deploymentStop(did);
-      if (ok) {
-        lines.push(lineOk(n.name, MS.stopOk));
-        continue;
+    let ok = 0;
+    let lastErr = null;
+    for (const t of toStop) {
+      try {
+        const r = await client.deploymentStop(t.id);
+        if (r) {
+          ok++;
+        } else {
+          lastErr = MS.stopNo;
+        }
+      } catch (ex) {
+        lastErr = safeErr(ex);
       }
-      lines.push(lineFail(n.name, MS.stopNo));
-    } catch (ex) {
-      lines.push(lineFail(n.name, safeErr(ex)));
+    }
+
+    const total = toStop.length;
+    if (ok === total) {
+      lines.push(
+        lineOk(
+          n.name,
+          total > 1
+            ? `stop accepted (${ok}/${total} deployments)`
+            : MS.stopOk
+        )
+      );
+    } else if (ok > 0) {
+      lines.push(
+        lineFail(
+          n.name,
+          `partial stop ${ok}/${total}${lastErr ? ` — ${lastErr}` : ""}`
+        )
+      );
+    } else {
+      lines.push(lineFail(n.name, lastErr || MS.stopNo));
     }
   }
 
