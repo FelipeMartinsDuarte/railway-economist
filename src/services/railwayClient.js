@@ -160,10 +160,11 @@ export class RailwayClient {
    * Railway injects RAILWAY_SERVICE_ID / RAILWAY_SERVICE_NAME when hosted there.
    */
   excludedServiceKeys() {
-    const ids = new Set([
-      ...parseCsv("RAILWAY_EXCLUDE_SERVICE_IDS"),
-      env("RAILWAY_SERVICE_ID"),
-    ].filter(Boolean));
+    const ids = new Set(
+      [...parseCsv("RAILWAY_EXCLUDE_SERVICE_IDS"), env("RAILWAY_SERVICE_ID")].filter(
+        Boolean
+      )
+    );
     const names = new Set(
       [
         ...parseCsv("RAILWAY_EXCLUDE_SERVICE_NAMES"),
@@ -176,12 +177,18 @@ export class RailwayClient {
     return { ids, names, stopSelf };
   }
 
-  isExcludedService(node) {
-    const { ids, names, stopSelf } = this.excludedServiceKeys();
-    if (stopSelf) return false;
+  /** Always true for this bot / explicit excludes (ignores RAILWAY_STOP_SELF). */
+  isSelfOrExcludedService(node) {
+    const { ids, names } = this.excludedServiceKeys();
     if (ids.has(node.id)) return true;
     if (names.has(String(node.name || "").toLowerCase())) return true;
     return false;
+  }
+
+  isExcludedService(node) {
+    const { stopSelf } = this.excludedServiceKeys();
+    if (stopSelf) return false;
+    return this.isSelfOrExcludedService(node);
   }
 
   async listServiceNodes() {
@@ -446,6 +453,78 @@ export class RailwayClient {
         error: String(ex?.message || ex).slice(0, 200),
       };
     }
+  }
+
+  async listRecentDeployments(serviceId, first = 10) {
+    try {
+      const data = await this._post(
+        `query Deployments($input: DeploymentListInput!, $first: Int) {
+          deployments(input: $input, first: $first) {
+            edges {
+              node { id status createdAt }
+            }
+          }
+        }`,
+        {
+          input: {
+            projectId: this.projectId,
+            environmentId: this.environmentId,
+            serviceId,
+          },
+          first,
+        }
+      );
+      return (data.deployments?.edges || [])
+        .map((e) => e?.node)
+        .filter((n) => n?.id)
+        .map((n) => ({
+          id: String(n.id),
+          status: String(n.status || ""),
+          createdAt: n.createdAt ? String(n.createdAt) : null,
+        }));
+    } catch {
+      const [id, status] = await this.getLatestDeployment(serviceId);
+      if (!id) return [];
+      return [{ id, status: status || "", createdAt: null }];
+    }
+  }
+
+  /**
+   * Snapshot for idle watchdog: running non-bot services + newest deploy time.
+   */
+  async getIdleSnapshot() {
+    await this.resolveScope();
+    const nodes = await this.listServiceNodes();
+    const work = nodes.filter((n) => !this.isSelfOrExcludedService(n));
+
+    let newestMs = 0;
+    const running = [];
+
+    await Promise.all(
+      work.map(async (n) => {
+        const deps = await this.listRecentDeployments(n.id, 15);
+        for (const d of deps) {
+          if (!d.createdAt) continue;
+          const t = Date.parse(d.createdAt);
+          if (Number.isFinite(t) && t > newestMs) newestMs = t;
+        }
+        const active = deps.filter((d) => RUNNING_LIKE.has(d.status));
+        if (active.length) {
+          running.push({
+            id: n.id,
+            name: n.name,
+            status: active[0].status,
+            count: active.length,
+          });
+        }
+      })
+    );
+
+    return {
+      running,
+      newestDeployAt: newestMs > 0 ? new Date(newestMs) : null,
+      checkedAt: new Date(),
+    };
   }
 
   async collectStatus() {

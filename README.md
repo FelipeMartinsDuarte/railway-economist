@@ -18,10 +18,21 @@ Bot no Telegram que ajuda a **economizar** no Railway ao **parar todos os deploy
 | `/down`  | Cancela **em paralelo** todos os deployments ativos (`deploymentCancel`; fallback `deploymentStop`), com várias passadas de retry. |
 | `/up`    | Sobe de novo (`deploymentRestart`, com fallback `deploymentRedeploy`). |
 | `/check` | Mostra status do deployment ativo por serviço. |
+| `/aguardar` | Estende +12h o idle watchdog (cancela o aviso de desligar em 30 min). |
 
 O `/down` **não desliga o próprio bot** por padrão (usa `RAILWAY_SERVICE_ID` / nome injetados pelo Railway). Assim o processo não morre no meio e consegue parar o restante. Para forçar parar o bot no fim: `RAILWAY_STOP_SELF=1`.
 
-O Telegram continua usando `/start` para conversar com o bot; os fluxos acima são **`/up`**, **`/down`** e **`/check`** para não conflitar.
+### Idle watchdog (auto-economia)
+
+Com `IDLE_WATCHDOG=1` (padrão), o bot verifica **a cada 1 h** se há serviços (exceto ele próprio) ligados **sem deploy novo** há mais de `IDLE_HOURS` (padrão 12). Se sim:
+
+1. Envia aviso no Telegram aos IDs de `TELEGRAM_ALLOWED_USER_IDS`.
+2. Espera `IDLE_WARN_MINUTES` (padrão 30).
+3. Se ninguém mandar `/aguardar`, executa `/down` sozinho.
+
+`/aguardar` empurra a próxima verificação em mais `IDLE_HOURS`.
+
+O Telegram continua usando `/start` para conversar com o bot; os fluxos acima são **`/up`**, **`/down`**, **`/check`** e **`/aguardar`**.
 
 ## Configuração rápida
 

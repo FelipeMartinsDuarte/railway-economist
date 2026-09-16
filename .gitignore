@@ -6,3 +6,4 @@ secret.txt
 *.log
 .DS_Store
 Thumbs.db
+.idle-watchdog-state.json

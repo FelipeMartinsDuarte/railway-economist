@@ -11,7 +11,7 @@ Guia de **onde obter** cada valor e o que colocar no `.env` ou no painel do host
 | Variável | O que é | Como obter |
 |----------|---------|------------|
 | `TELEGRAM_BOT_TOKEN` | Token do bot | Telegram → [@BotFather](https://t.me/BotFather) → `/newbot` ou o bot que já tens → recebes o token no formato `123456:ABC...` |
-| `TELEGRAM_ALLOWED_USER_IDS` | Quem pode usar `/up`, `/down`, `/check` | [@userinfobot](https://t.me/userinfobot) → copia o **Id** (só números). Vários separados por vírgula: `111111111,222222222` |
+| `TELEGRAM_ALLOWED_USER_IDS` | Quem pode usar `/up`, `/down`, `/check`, `/aguardar` | [@userinfobot](https://t.me/userinfobot) → copia o **Id** (só números). Vários separados por vírgula: `111111111,222222222` |
 
 ---
 
@@ -58,6 +58,10 @@ Se **os dois** estiverem definidos, esta app usa **`RAILWAY_TOKEN`** (Bearer) e 
 | `RAILWAY_API_RETRIES` | Retries em erros transitórios da API (429/5xx). Padrão `4`. |
 | `RAILWAY_STOP_SELF` | `1` = no fim do `/down`, cancela também o serviço deste bot. |
 | `RAILWAY_EXCLUDE_SERVICE_IDS` / `RAILWAY_EXCLUDE_SERVICE_NAMES` | Serviços que o `/down` nunca toca (além do bot, se aplicável). Vírgula-separados. |
+| `IDLE_WATCHDOG` | `1` (padrão) liga o auto-desligar por idle; `0` desliga. |
+| `IDLE_HOURS` | Horas sem deploy novo com serviços ligados antes do aviso (padrão `12`). |
+| `IDLE_WARN_MINUTES` | Minutos entre o aviso e o `/down` automático (padrão `30`). |
+| `IDLE_CHECK_MS` | Intervalo entre verificações em ms (padrão `3600000` = 1 h). |
 
 Quando este app corre **no Railway**, as variáveis `RAILWAY_SERVICE_ID` e `RAILWAY_SERVICE_NAME` já vêm injetadas — o `/down` usa-as para **saltar o próprio bot** e conseguir parar os outros serviços até ao fim.
 

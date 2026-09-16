@@ -3,6 +3,7 @@ import { Telegraf } from "telegraf";
 import { registerCommands } from "./src/bot/registerCommands.js";
 import { loadConfig } from "./src/config.js";
 import { createApp } from "./src/http/createApp.js";
+import { startIdleWatchdog } from "./src/services/idleWatchdog.js";
 
 const config = loadConfig();
 
@@ -32,6 +33,12 @@ const server = app.listen(config.port, async () => {
     }
   } else {
     console.warn("PUBLIC_BASE_URL unset — register the webhook manually.");
+  }
+
+  try {
+    await startIdleWatchdog(bot);
+  } catch (e) {
+    console.error("Idle watchdog:", e?.message || e);
   }
 });
 
