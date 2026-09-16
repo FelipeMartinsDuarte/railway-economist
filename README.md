@@ -1,6 +1,6 @@
 # RAILWAY ECONOMIST
 
-Bot no Telegram que ajuda a **economizar** no Railway ao **parar todos os deployments** de um projeto quando você não precisa deles rodando e **subir de novo** quando precisar. Não remove serviços, volumes nem configuração — só usa a API pública para `deploymentStop` e `deploymentRestart` por serviço.
+Bot no Telegram que ajuda a **economizar** no Railway ao **parar todos os deployments** de um projeto quando você não precisa deles rodando e **subir de novo** quando precisar. Não remove serviços, volumes nem configuração — usa a API pública (`deploymentCancel` / `deploymentStop`, `deploymentRestart` / `deploymentRedeploy`).
 
 **→ Guia passo a passo das variáveis de ambiente: [instructions.md](instructions.md)**
 
@@ -8,16 +8,18 @@ Bot no Telegram que ajuda a **economizar** no Railway ao **parar todos os deploy
 
 1. Você hospeda este app (por exemplo no próprio Railway) com HTTPS.
 2. Com `PUBLIC_BASE_URL` definida, ao **iniciar** o app regista o **webhook** no Telegram (ver instruções de como obter em [instructions.md](instructions.md)).
-3. Com um token da API do Railway, o app lista os serviços do projeto, lê o último deployment de cada um e aplica parar ou reiniciar conforme o comando.
+3. Com um token da API do Railway, o app lista os serviços do projeto, lê deployments ativos e aplica parar ou reiniciar conforme o comando.
 4. Só usuários cujo **ID do Telegram** está em `TELEGRAM_ALLOWED_USER_IDS` conseguem usar os comandos.
 
 ### Comandos
 
 | Comando  | Ação |
 |----------|------|
-| `/down`  | Para o último deployment de cada serviço (`deploymentStop`). |
-| `/up`    | Reinicia esses deployments (`deploymentRestart`). |
-| `/check` | Mostra status do último deployment por serviço. |
+| `/down`  | Cancela **em paralelo** todos os deployments ativos (`deploymentCancel`; fallback `deploymentStop`), com várias passadas de retry. |
+| `/up`    | Sobe de novo (`deploymentRestart`, com fallback `deploymentRedeploy`). |
+| `/check` | Mostra status do deployment ativo por serviço. |
+
+O `/down` **não desliga o próprio bot** por padrão (usa `RAILWAY_SERVICE_ID` / nome injetados pelo Railway). Assim o processo não morre no meio e consegue parar o restante. Para forçar parar o bot no fim: `RAILWAY_STOP_SELF=1`.
 
 O Telegram continua usando `/start` para conversar com o bot; os fluxos acima são **`/up`**, **`/down`** e **`/check`** para não conflitar.
 

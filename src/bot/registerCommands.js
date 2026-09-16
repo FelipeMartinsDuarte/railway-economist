@@ -28,6 +28,9 @@ export function registerCommands(bot) {
       return;
     }
     try {
+      await ctx.reply(
+        "railway-economist · scale down\ncancelling all active deployments in parallel…"
+      );
       await ctx.reply(await runDownAll());
     } catch (e) {
       console.error(e);

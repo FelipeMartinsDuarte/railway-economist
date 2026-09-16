@@ -53,6 +53,13 @@ Se **os dois** estiverem definidos, esta app usa **`RAILWAY_TOKEN`** (Bearer) e 
 | `RAILWAY_PROJECT_ID` | Com **project token**, muitas vezes podes **deixar vazio** — o código resolve via query `projectToken`. Se falhar: no Railway **Ctrl+K** → “Copy Project ID”. |
 | `RAILWAY_ENVIRONMENT_ID` | Na maior parte dos casos **vazio** — o script usa o **environment base** do projeto. Preenche só se quiseres outro ambiente (ex.: staging): copia o ID no dashboard. |
 | `RAILWAY_TOKEN` | Token de **conta ou workspace** — [railway.com/account/tokens](https://railway.com/account/tokens). Só necessário se **não** usares `RAILWAY_PROJECT_TOKEN`. |
+| `RAILWAY_STOP_PASSES` | Quantas ondas paralelas de cancel o `/down` faz (padrão `5`). |
+| `RAILWAY_STOP_SETTLE_MS` | Espera entre ondas (padrão `4000`). |
+| `RAILWAY_API_RETRIES` | Retries em erros transitórios da API (429/5xx). Padrão `4`. |
+| `RAILWAY_STOP_SELF` | `1` = no fim do `/down`, cancela também o serviço deste bot. |
+| `RAILWAY_EXCLUDE_SERVICE_IDS` / `RAILWAY_EXCLUDE_SERVICE_NAMES` | Serviços que o `/down` nunca toca (além do bot, se aplicável). Vírgula-separados. |
+
+Quando este app corre **no Railway**, as variáveis `RAILWAY_SERVICE_ID` e `RAILWAY_SERVICE_NAME` já vêm injetadas — o `/down` usa-as para **saltar o próprio bot** e conseguir parar os outros serviços até ao fim.
 
 ---
 

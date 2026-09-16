@@ -2,16 +2,30 @@ import { lineFail, lineInfo, lineOk, lineSkip, MS, section } from "../format/lin
 
 const RAILWAY_GQL = "https://backboard.railway.com/graphql/v2";
 
-const RUNNING_LIKE = new Set([
+/** Statuses that still consume compute / should be halted on /down. */
+export const RUNNING_LIKE = new Set([
   "SUCCESS",
   "BUILDING",
   "DEPLOYING",
   "QUEUED",
   "WAITING",
+  "INITIALIZING",
+  "REMOVING",
 ]);
 
 function env(name, fallback = "") {
   return String(process.env[name] ?? fallback).trim();
+}
+
+function parseCsv(name) {
+  return env(name)
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 function railwayAuthHint(msg) {
@@ -20,6 +34,22 @@ function railwayAuthHint(msg) {
   return (
     " Check token at railway.com/account/tokens; RAILWAY_PROJECT_TOKEN binds scope from token (manual PROJECT_ID ignored); " +
     "if both RAILWAY_TOKEN and RAILWAY_PROJECT_TOKEN are set, only RAILWAY_TOKEN is used."
+  );
+}
+
+function isRetryableError(err) {
+  const m = String(err?.message || err).toLowerCase();
+  return (
+    m.includes("rate limit") ||
+    m.includes("too many") ||
+    m.includes("timeout") ||
+    m.includes("timed out") ||
+    m.includes("econnreset") ||
+    m.includes("fetch failed") ||
+    m.includes("http 429") ||
+    m.includes("http 502") ||
+    m.includes("http 503") ||
+    m.includes("http 504")
   );
 }
 
@@ -33,6 +63,11 @@ export class RailwayClient {
     this._useBearer = Boolean(this._bearer);
     this.projectId = env("RAILWAY_PROJECT_ID");
     this.environmentId = env("RAILWAY_ENVIRONMENT_ID");
+    this._maxRetries = Math.max(0, Number(env("RAILWAY_API_RETRIES", "4")) || 4);
+    this._retryBaseMs = Math.max(
+      100,
+      Number(env("RAILWAY_API_RETRY_BASE_MS", "400")) || 400
+    );
   }
 
   _headers() {
@@ -45,7 +80,7 @@ export class RailwayClient {
     return h;
   }
 
-  async _post(query, variables) {
+  async _postOnce(query, variables) {
     const body = { query };
     if (variables != null) body.variables = variables;
     const r = await fetch(RAILWAY_GQL, {
@@ -66,6 +101,23 @@ export class RailwayClient {
       throw new Error(msg + railwayAuthHint(msg));
     }
     return json.data || {};
+  }
+
+  async _post(query, variables) {
+    let lastErr;
+    for (let attempt = 0; attempt <= this._maxRetries; attempt++) {
+      try {
+        return await this._postOnce(query, variables);
+      } catch (ex) {
+        lastErr = ex;
+        if (attempt >= this._maxRetries || !isRetryableError(ex)) {
+          throw ex;
+        }
+        const wait = this._retryBaseMs * 2 ** attempt;
+        await sleep(wait);
+      }
+    }
+    throw lastErr;
   }
 
   async resolveScope() {
@@ -101,6 +153,35 @@ export class RailwayClient {
         "Could not resolve environment (set RAILWAY_ENVIRONMENT_ID)"
       );
     }
+  }
+
+  /**
+   * Services this process must not stop (keeps the bot alive to finish /down).
+   * Railway injects RAILWAY_SERVICE_ID / RAILWAY_SERVICE_NAME when hosted there.
+   */
+  excludedServiceKeys() {
+    const ids = new Set([
+      ...parseCsv("RAILWAY_EXCLUDE_SERVICE_IDS"),
+      env("RAILWAY_SERVICE_ID"),
+    ].filter(Boolean));
+    const names = new Set(
+      [
+        ...parseCsv("RAILWAY_EXCLUDE_SERVICE_NAMES"),
+        env("RAILWAY_SERVICE_NAME"),
+      ]
+        .filter(Boolean)
+        .map((s) => s.toLowerCase())
+    );
+    const stopSelf = env("RAILWAY_STOP_SELF") === "1";
+    return { ids, names, stopSelf };
+  }
+
+  isExcludedService(node) {
+    const { ids, names, stopSelf } = this.excludedServiceKeys();
+    if (stopSelf) return false;
+    if (ids.has(node.id)) return true;
+    if (names.has(String(node.name || "").toLowerCase())) return true;
+    return false;
   }
 
   async listServiceNodes() {
@@ -177,46 +258,105 @@ export class RailwayClient {
     return [String(dep.id), String(dep.status || "")];
   }
 
+  /**
+   * Prefer root `deployments` query (official list). Fall back to serviceInstance.
+   */
   async getDeploymentTargets(serviceId) {
-    const vars = {
-      environmentId: this.environmentId,
-      serviceId,
-    };
-    let si = {};
+    const byId = new Map();
+
     try {
-      const data = await this._post(
-        `query Si($environmentId: String!, $serviceId: String!) {
-          serviceInstance(environmentId: $environmentId, serviceId: $serviceId) {
-            activeDeployments { id status }
-            latestDeployment { id status }
+      let after = null;
+      let hasNext = true;
+      while (hasNext) {
+        const data = await this._post(
+          `query Deployments(
+            $input: DeploymentListInput!
+            $first: Int
+            $after: String
+          ) {
+            deployments(input: $input, first: $first, after: $after) {
+              pageInfo { hasNextPage endCursor }
+              edges {
+                node { id status }
+              }
+            }
+          }`,
+          {
+            input: {
+              projectId: this.projectId,
+              environmentId: this.environmentId,
+              serviceId,
+            },
+            first: 50,
+            after,
           }
-        }`,
-        vars
-      );
-      si = data.serviceInstance || {};
+        );
+        const conn = data.deployments;
+        for (const e of conn?.edges || []) {
+          const n = e?.node;
+          if (!n?.id) continue;
+          const status = String(n.status || "");
+          if (RUNNING_LIKE.has(status)) {
+            byId.set(String(n.id), status);
+          }
+        }
+        const pi = conn?.pageInfo;
+        hasNext = Boolean(pi?.hasNextPage);
+        after = pi?.endCursor || null;
+        if (!hasNext) break;
+      }
     } catch {
-      const data = await this._post(
-        `query Si($environmentId: String!, $serviceId: String!) {
-          serviceInstance(environmentId: $environmentId, serviceId: $serviceId) {
-            latestDeployment { id status }
-          }
-        }`,
-        vars
-      );
-      si = data.serviceInstance || {};
+      // fall through to serviceInstance
     }
 
-    const byId = new Map();
-    const actives = si.activeDeployments || [];
-    for (const d of actives) {
-      if (d?.id) byId.set(String(d.id), String(d.status || ""));
-    }
     if (byId.size === 0) {
+      const vars = {
+        environmentId: this.environmentId,
+        serviceId,
+      };
+      let si = {};
+      try {
+        const data = await this._post(
+          `query Si($environmentId: String!, $serviceId: String!) {
+            serviceInstance(environmentId: $environmentId, serviceId: $serviceId) {
+              activeDeployments { id status }
+              latestDeployment { id status }
+            }
+          }`,
+          vars
+        );
+        si = data.serviceInstance || {};
+      } catch {
+        try {
+          const data = await this._post(
+            `query Si($environmentId: String!, $serviceId: String!) {
+              serviceInstance(environmentId: $environmentId, serviceId: $serviceId) {
+                latestDeployment { id status }
+              }
+            }`,
+            vars
+          );
+          si = data.serviceInstance || {};
+        } catch {
+          si = {};
+        }
+      }
+      for (const d of si.activeDeployments || []) {
+        if (!d?.id) continue;
+        const status = String(d.status || "");
+        if (RUNNING_LIKE.has(status)) {
+          byId.set(String(d.id), status);
+        }
+      }
       const latest = si.latestDeployment;
       if (latest?.id) {
-        byId.set(String(latest.id), String(latest.status || ""));
+        const status = String(latest.status || "");
+        if (RUNNING_LIKE.has(status)) {
+          byId.set(String(latest.id), status);
+        }
       }
     }
+
     return [...byId.entries()].map(([id, status]) => ({ id, status }));
   }
 
@@ -239,12 +379,73 @@ export class RailwayClient {
     return Boolean(data.deploymentStop);
   }
 
+  async deploymentCancel(deploymentId) {
+    const data = await this._post(
+      `mutation Cancel($id: String!) { deploymentCancel(id: $id) }`,
+      { id: deploymentId }
+    );
+    return Boolean(data.deploymentCancel);
+  }
+
+  /**
+   * Halt a deployment. Prefer deploymentCancel for every state:
+   * deploymentStop often returns true on SUCCESS without killing the container.
+   * Fall back to deploymentStop only if cancel fails.
+   */
+  async haltDeployment(deploymentId, _status) {
+    try {
+      const ok = await this.deploymentCancel(deploymentId);
+      if (ok) return true;
+    } catch (cancelErr) {
+      try {
+        return await this.deploymentStop(deploymentId);
+      } catch {
+        throw cancelErr;
+      }
+    }
+    try {
+      return await this.deploymentStop(deploymentId);
+    } catch {
+      return false;
+    }
+  }
+
   async deploymentRestart(deploymentId) {
     const data = await this._post(
       `mutation Restart($id: String!) { deploymentRestart(id: $id) }`,
       { id: deploymentId }
     );
     return Boolean(data.deploymentRestart);
+  }
+
+  async deploymentRedeploy(deploymentId) {
+    const data = await this._post(
+      `mutation Redeploy($id: String!) { deploymentRedeploy(id: $id) { id } }`,
+      { id: deploymentId }
+    );
+    return Boolean(data.deploymentRedeploy?.id);
+  }
+
+  /** After /down (cancel), restart may fail — try redeploy. */
+  async deploymentBringUp(deploymentId) {
+    try {
+      const ok = await this.deploymentRestart(deploymentId);
+      if (ok) return { ok: true, method: "restart" };
+    } catch {
+      /* try redeploy */
+    }
+    try {
+      const ok = await this.deploymentRedeploy(deploymentId);
+      return ok
+        ? { ok: true, method: "redeploy" }
+        : { ok: false, method: "redeploy", error: "API returned false" };
+    } catch (ex) {
+      return {
+        ok: false,
+        method: "redeploy",
+        error: String(ex?.message || ex).slice(0, 200),
+      };
+    }
   }
 
   async collectStatus() {
@@ -254,13 +455,15 @@ export class RailwayClient {
     for (const n of nodes) {
       try {
         const targets = await this.getDeploymentTargets(n.id);
-        const first = targets[0];
+        const running = targets.filter((t) => RUNNING_LIKE.has(t.status));
+        const first = running[0] || targets[0];
         result.push({
           serviceId: n.id,
           serviceName: n.name,
           deploymentId: first?.id ?? null,
           status: first?.status ?? null,
-          activeCount: targets.length,
+          activeCount: running.length,
+          excluded: this.isExcludedService(n),
           error: null,
         });
       } catch (ex) {
@@ -270,6 +473,7 @@ export class RailwayClient {
           deploymentId: null,
           status: null,
           activeCount: 0,
+          excluded: this.isExcludedService(n),
           error: String(ex?.message || ex).slice(0, 200),
         });
       }
@@ -289,9 +493,10 @@ export function formatStatus(rows) {
     }
     const ac = r.activeCount ?? 0;
     const extra = ac > 1 ? ` active_deployments=${ac}` : "";
+    const keep = r.excluded ? " (bot/excluded)" : "";
     return lineOk(
       r.serviceName,
-      `status=${r.status} deploy=${r.deploymentId}${extra}`
+      `status=${r.status} deploy=${r.deploymentId}${extra}${keep}`
     );
   });
   return section("railway-economist · status", lines);
