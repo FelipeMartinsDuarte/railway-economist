@@ -6,8 +6,16 @@ import { runDownAll } from "./economist.js";
 import { RailwayClient } from "./railwayClient.js";
 
 function envNum(name, fallback) {
-  const n = Number(String(process.env[name] ?? "").trim());
+  const raw = String(process.env[name] ?? "").trim();
+  if (!raw) return fallback;
+  const n = Number(raw);
   return Number.isFinite(n) ? n : fallback;
+}
+
+/** Positive number from env; empty/0/invalid → fallback. */
+function envPositive(name, fallback) {
+  const n = envNum(name, fallback);
+  return n > 0 ? n : fallback;
 }
 
 function envFlagOn(name, defaultOn = true) {
@@ -40,9 +48,11 @@ export class IdleWatchdog {
   constructor({ bot, notifyUserIds }) {
     this.bot = bot;
     this.notifyUserIds = [...notifyUserIds];
-    this.idleMs = Math.max(60_000, envNum("IDLE_HOURS", 12) * 3_600_000);
-    this.warnMs = Math.max(60_000, envNum("IDLE_WARN_MINUTES", 30) * 60_000);
-    this.checkMs = Math.max(60_000, envNum("IDLE_CHECK_MS", 3_600_000));
+    this.idleHours = envPositive("IDLE_HOURS", 12);
+    this.warnMinutes = envPositive("IDLE_WARN_MINUTES", 30);
+    this.idleMs = this.idleHours * 3_600_000;
+    this.warnMs = this.warnMinutes * 60_000;
+    this.checkMs = Math.max(60_000, envPositive("IDLE_CHECK_MS", 3_600_000));
     this.enabled = envFlagOn("IDLE_WATCHDOG", true);
     this._timer = null;
     this._ticking = false;
@@ -101,8 +111,8 @@ export class IdleWatchdog {
     this.state.shutdownAtMs = 0;
     this.state.lastNotifyKey = "";
     this.state.firstSeenRunningMs = Date.now();
+    const hours = this.idleHours;
     await this.save();
-    const hours = Math.round(this.idleMs / 3_600_000);
     return {
       untilMs: until,
       message:
@@ -127,8 +137,8 @@ export class IdleWatchdog {
       console.warn("[idle-watchdog] enabled but no allowed user ids — skipping");
       return;
     }
-    const hours = Math.round(this.idleMs / 3_600_000);
-    const warnMin = Math.round(this.warnMs / 60_000);
+    const hours = this.idleHours;
+    const warnMin = this.warnMinutes;
     console.log(
       `[idle-watchdog] on — idle ${hours}h, warn ${warnMin}m, check every ${Math.round(this.checkMs / 1000)}s`
     );
@@ -214,8 +224,8 @@ export class IdleWatchdog {
       .join(", ");
     const extra =
       snap.running.length > 20 ? ` (+${snap.running.length - 20})` : "";
-    const hours = Math.round(this.idleMs / 3_600_000);
-    const warnMin = Math.round(this.warnMs / 60_000);
+    const hours = this.idleHours;
+    const warnMin = this.warnMinutes;
     const notifyKey = `${newest || "none"}:${snap.running
       .map((r) => r.id)
       .sort()
