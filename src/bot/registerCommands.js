@@ -16,6 +16,9 @@ export function registerCommands(bot) {
       return;
     }
     try {
+      await ctx.reply(
+        "railway-economist · scale up\nbringing infra first (Redis/DBs), then apps…"
+      );
       await ctx.reply(await runUpAll());
     } catch (e) {
       console.error(e);

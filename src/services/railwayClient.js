@@ -252,17 +252,127 @@ export class RailwayClient {
   }
 
   async getLatestDeployment(serviceId) {
+    try {
+      const data = await this._post(
+        `query Si($environmentId: String!, $serviceId: String!) {
+          serviceInstance(environmentId: $environmentId, serviceId: $serviceId) {
+            latestDeployment { id status }
+          }
+        }`,
+        { environmentId: this.environmentId, serviceId }
+      );
+      const dep = data.serviceInstance?.latestDeployment;
+      if (dep?.id) {
+        return [String(dep.id), String(dep.status || "")];
+      }
+    } catch {
+      /* fall through to history */
+    }
+
+    const recent = await this.listRecentDeployments(serviceId, 25);
+    if (recent[0]?.id) {
+      return [recent[0].id, recent[0].status || ""];
+    }
+    return [null, null];
+  }
+
+  async serviceInstanceRedeploy(serviceId) {
     const data = await this._post(
-      `query Si($environmentId: String!, $serviceId: String!) {
-        serviceInstance(environmentId: $environmentId, serviceId: $serviceId) {
-          latestDeployment { id status }
-        }
+      `mutation RedeploySvc($serviceId: String!, $environmentId: String!) {
+        serviceInstanceRedeploy(serviceId: $serviceId, environmentId: $environmentId)
       }`,
-      { environmentId: this.environmentId, serviceId }
+      { serviceId, environmentId: this.environmentId }
     );
-    const dep = data.serviceInstance?.latestDeployment;
-    if (!dep) return [null, null];
-    return [String(dep.id), String(dep.status || "")];
+    return Boolean(data.serviceInstanceRedeploy);
+  }
+
+  async serviceInstanceDeploy(serviceId) {
+    const data = await this._post(
+      `mutation DeploySvc($serviceId: String!, $environmentId: String!) {
+        serviceInstanceDeployV2(serviceId: $serviceId, environmentId: $environmentId)
+      }`,
+      { serviceId, environmentId: this.environmentId }
+    );
+    const id = data.serviceInstanceDeployV2;
+    return id ? String(id) : "";
+  }
+
+  /**
+   * Bring a stopped/cancelled service back.
+   * Prefer serviceInstanceRedeploy (no deployment id; reuses last commit/image).
+   */
+  async bringServiceUp(serviceId) {
+    const active = await this.getDeploymentTargets(serviceId);
+    if (active.some((t) => RUNNING_LIKE.has(t.status))) {
+      return { ok: true, method: "already-up" };
+    }
+
+    try {
+      if (await this.serviceInstanceRedeploy(serviceId)) {
+        return { ok: true, method: "service-redeploy" };
+      }
+    } catch {
+      /* try next strategy */
+    }
+
+    try {
+      const id = await this.serviceInstanceDeploy(serviceId);
+      if (id) return { ok: true, method: "service-deploy" };
+    } catch {
+      /* try deployment-level */
+    }
+
+    const [did, status] = await this.getLatestDeployment(serviceId);
+    if (!did) {
+      return {
+        ok: false,
+        method: "none",
+        error: "nothing to restart (no deployment)",
+      };
+    }
+
+    if (status === "SUCCESS" || status === "CRASHED") {
+      try {
+        if (await this.deploymentRestart(did)) {
+          return { ok: true, method: "restart" };
+        }
+      } catch {
+        /* try redeploy */
+      }
+    }
+
+    try {
+      if (await this.deploymentRedeploy(did)) {
+        return { ok: true, method: "deployment-redeploy" };
+      }
+      return {
+        ok: false,
+        method: "deployment-redeploy",
+        error: "API returned false",
+      };
+    } catch (ex) {
+      return {
+        ok: false,
+        method: "deployment-redeploy",
+        error: String(ex?.message || ex).slice(0, 200),
+      };
+    }
+  }
+
+  async deploymentRestart(deploymentId) {
+    const data = await this._post(
+      `mutation Restart($id: String!) { deploymentRestart(id: $id) }`,
+      { id: deploymentId }
+    );
+    return Boolean(data.deploymentRestart);
+  }
+
+  async deploymentRedeploy(deploymentId) {
+    const data = await this._post(
+      `mutation Redeploy($id: String!) { deploymentRedeploy(id: $id) { id } }`,
+      { id: deploymentId }
+    );
+    return Boolean(data.deploymentRedeploy?.id);
   }
 
   /**
@@ -417,44 +527,6 @@ export class RailwayClient {
     }
   }
 
-  async deploymentRestart(deploymentId) {
-    const data = await this._post(
-      `mutation Restart($id: String!) { deploymentRestart(id: $id) }`,
-      { id: deploymentId }
-    );
-    return Boolean(data.deploymentRestart);
-  }
-
-  async deploymentRedeploy(deploymentId) {
-    const data = await this._post(
-      `mutation Redeploy($id: String!) { deploymentRedeploy(id: $id) { id } }`,
-      { id: deploymentId }
-    );
-    return Boolean(data.deploymentRedeploy?.id);
-  }
-
-  /** After /down (cancel), restart may fail — try redeploy. */
-  async deploymentBringUp(deploymentId) {
-    try {
-      const ok = await this.deploymentRestart(deploymentId);
-      if (ok) return { ok: true, method: "restart" };
-    } catch {
-      /* try redeploy */
-    }
-    try {
-      const ok = await this.deploymentRedeploy(deploymentId);
-      return ok
-        ? { ok: true, method: "redeploy" }
-        : { ok: false, method: "redeploy", error: "API returned false" };
-    } catch (ex) {
-      return {
-        ok: false,
-        method: "redeploy",
-        error: String(ex?.message || ex).slice(0, 200),
-      };
-    }
-  }
-
   async listRecentDeployments(serviceId, first = 10) {
     try {
       const data = await this._post(
@@ -483,9 +555,7 @@ export class RailwayClient {
           createdAt: n.createdAt ? String(n.createdAt) : null,
         }));
     } catch {
-      const [id, status] = await this.getLatestDeployment(serviceId);
-      if (!id) return [];
-      return [{ id, status: status || "", createdAt: null }];
+      return [];
     }
   }
 

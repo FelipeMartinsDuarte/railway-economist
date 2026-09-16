@@ -30,6 +30,24 @@ function maxPasses() {
   return Math.max(1, Number.isFinite(n) ? n : 5);
 }
 
+function upInfraGapMs() {
+  const n = Number(process.env.RAILWAY_UP_INFRA_GAP_MS ?? 25000);
+  return Number.isFinite(n) && n >= 0 ? n : 25000;
+}
+
+function upBatchSize() {
+  const n = Number(process.env.RAILWAY_UP_BATCH_SIZE ?? 4);
+  return Math.max(1, Number.isFinite(n) ? n : 4);
+}
+
+/** DBs / brokers first so apps don't build against missing deps. */
+const INFRA_NAME_RE =
+  /\b(redis|valkey|mongo|postgres|postgresql|mysql|mariadb|rabbit|amqp|qdrant|kafka|elastic|opensearch|memcache|minio|nats)\b/i;
+
+function isInfraService(node) {
+  return INFRA_NAME_RE.test(String(node.name || ""));
+}
+
 /**
  * Collect every running-like deployment across services, then halt them
  * all in one Promise.allSettled wave (true “stop everything at once”).
@@ -69,30 +87,62 @@ async function haltWave(client, activeRows) {
   return { jobs, results };
 }
 
+async function bringUpBatch(client, nodes) {
+  const lines = [];
+  const batch = upBatchSize();
+  for (let i = 0; i < nodes.length; i += batch) {
+    const chunk = nodes.slice(i, i + batch);
+    const outcomes = await Promise.all(
+      chunk.map(async (n) => {
+        try {
+          const r = await client.bringServiceUp(n.id);
+          if (r.ok) {
+            return lineOk(n.name, `${MS.upOk} (${r.method})`);
+          }
+          return lineFail(n.name, r.error || MS.upNo);
+        } catch (ex) {
+          return lineFail(n.name, safeErr(ex));
+        }
+      })
+    );
+    lines.push(...outcomes);
+    if (i + batch < nodes.length) {
+      await sleep(1500);
+    }
+  }
+  return lines;
+}
+
 export async function runUpAll() {
   const client = new RailwayClient();
   await client.resolveScope();
   const nodes = await client.listServiceNodes();
   const lines = [];
 
-  const outcomes = await Promise.all(
-    nodes.map(async (n) => {
-      const [did] = await client.getLatestDeployment(n.id);
-      if (!did) {
-        return lineFail(n.name, MS.upNone);
-      }
-      try {
-        const r = await client.deploymentBringUp(did);
-        if (r.ok) {
-          return lineOk(n.name, `${MS.upOk} (${r.method})`);
-        }
-        return lineFail(n.name, r.error || MS.upNo);
-      } catch (ex) {
-        return lineFail(n.name, safeErr(ex));
-      }
-    })
-  );
-  lines.push(...outcomes);
+  const work = [];
+  for (const n of nodes) {
+    if (client.isSelfOrExcludedService(n)) {
+      lines.push(lineSkip(n.name, "bot/excluded — left as-is during /up"));
+      continue;
+    }
+    work.push(n);
+  }
+
+  const infra = work.filter(isInfraService);
+  const apps = work.filter((n) => !isInfraService(n));
+
+  if (infra.length) {
+    lines.push(...(await bringUpBatch(client, infra)));
+    const gap = upInfraGapMs();
+    if (gap > 0 && apps.length) {
+      await sleep(gap);
+    }
+  }
+
+  if (apps.length) {
+    lines.push(...(await bringUpBatch(client, apps)));
+  }
+
   return section("railway-economist · scale up", lines);
 }
 

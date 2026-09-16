@@ -16,7 +16,7 @@ Bot no Telegram que ajuda a **economizar** no Railway ao **parar todos os deploy
 | Comando  | Ação |
 |----------|------|
 | `/down`  | Cancela **em paralelo** todos os deployments ativos (`deploymentCancel`; fallback `deploymentStop`), com várias passadas de retry. |
-| `/up`    | Sobe de novo (`deploymentRestart`, com fallback `deploymentRedeploy`). |
+| `/up`    | Sobe de novo: `serviceInstanceRedeploy` (e fallbacks). Infra (Redis/DBs) sobe primeiro; apps em lotes. |
 | `/check` | Mostra status do deployment ativo por serviço. |
 | `/aguardar` | Estende +12h o idle watchdog (cancela o aviso de desligar em 30 min). |
 
